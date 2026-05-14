@@ -1,350 +1,184 @@
 require("dotenv").config();
 
-process.on("unhandledRejection", err => {
-  console.error("Unhandled Error:", err);
-});
-
 const express = require("express");
 const axios = require("axios");
 const mongoose = require("mongoose");
 const nodemailer = require("nodemailer");
 
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 const SLOW_THRESHOLD = 2000;
 
 app.use(express.json());
 
-// ---------------- EMAIL ----------------
-const EMAIL_ENABLED = (process.env.EMAIL_ENABLED || "").toLowerCase() === "true";
-const EMAIL_PASS = (process.env.EMAIL_PASS || "").replace(/\s+/g, "");
+/* =========================
+   MongoDB Connection
+========================= */
 
-let transporter = null;
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB Connected"))
+  .catch((err) => console.log("MongoDB Error:", err));
 
-if (EMAIL_ENABLED && process.env.EMAIL_USER && EMAIL_PASS) {
-  transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: EMAIL_PASS
-    }
-  });
-}
+/* =========================
+   Schema
+========================= */
 
-async function sendEmail(url) {
-  if (!EMAIL_ENABLED || !transporter) {
-    console.log("⚠️ Email disabled:", url);
-    return;
-  }
-
-  try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: process.env.EMAIL_TO,
-      subject: "🚨 API DOWN ALERT",
-      text: `${url} is DOWN!`
-    });
-
-    console.log("✅ Email sent:", url);
-
-  } catch (err) {
-    console.error("❌ Email error:", err.message);
-  }
-}
-
-// ---------------- DATABASE FIX ----------------
-const MONGO_URI =
-  process.env.MONGO_URI || "mongodb://127.0.0.1:27017/api-monitor";
-
-console.log("Using DB:", MONGO_URI);
-
-mongoose.connect(MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch(err => console.log("❌ DB Error:", err));
-
-// ---------------- SCHEMA ----------------
-const ApiLog = mongoose.model("ApiLog", new mongoose.Schema({
+const apiLogSchema = new mongoose.Schema({
   url: String,
   status: String,
   responseTime: Number,
-  time: { type: Date, default: Date.now }
-}));
+  statusCode: Number,
+  checkedAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
 
-const ApiList = mongoose.model("ApiList", new mongoose.Schema({
-  url: { type: String, unique: true },
-  lastAlert: Number
-}));
+const ApiLog = mongoose.model("ApiLog", apiLogSchema);
 
-// ---------------- DEFAULT APIs ----------------
-async function loadDefaults() {
-  const defaults = [
-    "https://www.google.com",
-    "https://www.youtube.com",
-    "https://jsonplaceholder.typicode.com/posts"
-  ];
+/* =========================
+   Email Setup
+========================= */
 
-  const count = await ApiList.countDocuments();
-  if (count === 0) {
-    for (let url of defaults) {
-      await ApiList.create({ url });
-    }
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+/* =========================
+   APIs To Monitor
+========================= */
+
+let monitoredApis = [
+  "https://jsonplaceholder.typicode.com/posts",
+  "https://api.github.com",
+];
+
+/* =========================
+   Send Email Alert
+========================= */
+
+async function sendEmailAlert(url, error) {
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: process.env.ALERT_EMAIL,
+      subject: "API DOWN ALERT 🚨",
+      text: `API Failed: ${url}\n\nError: ${error}`,
+    });
+
+    console.log("Alert email sent");
+  } catch (err) {
+    console.log("Email Error:", err.message);
   }
 }
-loadDefaults();
 
-// ---------------- CHECK API ----------------
-async function checkAPI(url) {
+/* =========================
+   API Health Checker
+========================= */
+
+async function checkApi(url) {
   const start = Date.now();
 
   try {
-    await axios.head(url, { timeout: 5000 });
-    const t = Date.now() - start;
+    const response = await axios.get(url);
 
-    return {
-      status: t > SLOW_THRESHOLD ? "SLOW" : "UP",
-      responseTime: t
-    };
+    const responseTime = Date.now() - start;
 
-  } catch {
-    try {
-      await axios.get(url, { timeout: 5000 });
-      const t = Date.now() - start;
-
-      return {
-        status: t > SLOW_THRESHOLD ? "SLOW" : "UP",
-        responseTime: t
-      };
-
-    } catch (err) {
-      if (err.response) return { status: "SLOW", responseTime: null };
-      return { status: "DOWN", responseTime: null };
-    }
-  }
-}
-
-// ---------------- MONITOR ----------------
-setInterval(async () => {
-  const apis = await ApiList.find();
-
-  for (let api of apis) {
-    const result = await checkAPI(api.url);
-
-    console.log("Checking:", api.url, result.status);
-
-    await ApiLog.create({
-      url: api.url,
-      status: result.status,
-      responseTime: result.responseTime
+    const log = new ApiLog({
+      url,
+      status: "UP",
+      responseTime,
+      statusCode: response.status,
     });
 
-    const now = Date.now();
+    await log.save();
 
-    if (result.status === "DOWN") {
-      if (!api.lastAlert || now - api.lastAlert > 300000) {
-        sendEmail(api.url);
-        api.lastAlert = now;
-        await api.save();
-      }
+    console.log(
+      `✅ ${url} | ${response.status} | ${responseTime}ms`
+    );
+
+    if (responseTime > SLOW_THRESHOLD) {
+      console.log(`⚠ Slow API Detected: ${url}`);
     }
+  } catch (error) {
+    const responseTime = Date.now() - start;
+
+    const log = new ApiLog({
+      url,
+      status: "DOWN",
+      responseTime,
+      statusCode: error.response?.status || 500,
+    });
+
+    await log.save();
+
+    console.log(`❌ ${url} DOWN`);
+
+    await sendEmailAlert(url, error.message);
   }
-}, 10000);
-
-// ---------------- UPTIME ----------------
-async function getUptime(url) {
-  const logs = await ApiLog.find({
-    url,
-    time: { $gte: new Date(Date.now() - 86400000) }
-  });
-
-  if (!logs.length) return 0;
-
-  const up = logs.filter(l => l.status === "UP").length;
-  return ((up / logs.length) * 100).toFixed(2);
 }
 
-// ---------------- DASHBOARD ----------------
+/* =========================
+   Run Monitoring
+========================= */
+
+setInterval(() => {
+  monitoredApis.forEach((url) => {
+    checkApi(url);
+  });
+}, 60000);
+
+/* =========================
+   Routes
+========================= */
+
 app.get("/", (req, res) => {
-  res.send(`
-  <html>
-  <head>
-    <style>
-      body { background:#0b1b34;color:white;text-align:center;font-family:Arial }
-      .grid { display:flex;flex-wrap:wrap;justify-content:center }
-      .card {
-        width:260px;margin:15px;padding:20px;border-radius:10px;
-        word-break:break-all
-      }
-      .UP{background:green}
-      .SLOW{background:orange}
-      .DOWN{background:red}
-      #alertBox {
-        position:fixed;top:20px;right:20px;background:red;padding:10px;display:none
-      }
-    </style>
-  </head>
-
-  <body>
-  <h1>🚀 API Monitor</h1>
-
-  <input id="url" placeholder="https://example.com">
-  <button onclick="add()">Add</button>
-
-  <div id="summary"></div>
-  <div id="alertBox"></div>
-  <div class="grid" id="cards"></div>
-
-  <script>
-  let lastDown=[];
-
-  async function load(){
-    const res = await fetch("/status");
-    const data = await res.json();
-
-    let up=0,slow=0,down=0;
-    let currentDown=[];
-
-    const c=document.getElementById("cards");
-    c.innerHTML="";
-
-    data.forEach(api=>{
-      if(api.status==="UP") up++;
-      else if(api.status==="SLOW") slow++;
-      else down++;
-
-      if(api.status==="DOWN") currentDown.push(api._id);
-
-      c.innerHTML+=\`
-        <div class="card \${api.status}">
-          <b>\${api._id}</b><br><br>
-          Status:\${api.status}<br>
-          Response:\${api.responseTime||"-"} ms<br>
-          Uptime:\${api.uptime}%<br><br>
-
-          <button onclick="graph('\${api._id}')">Graph</button>
-          <button onclick="removeApi('\${api._id}',this)">Remove</button>
-        </div>
-      \`;
-    });
-
-    document.getElementById("summary").innerText =
-      "UP:"+up+" | SLOW:"+slow+" | DOWN:"+down;
-
-    const newDown=currentDown.filter(x=>!lastDown.includes(x));
-
-    if(newDown.length){
-      const box=document.getElementById("alertBox");
-      box.innerHTML="🚨 DOWN: "+newDown.join(",");
-      box.style.display="block";
-      setTimeout(()=>box.style.display="none",3000);
-    }
-
-    lastDown=currentDown;
-  }
-
-  async function add(){
-    const url=document.getElementById("url").value.trim();
-    await fetch("/add-api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})});
-    load();
-  }
-
-  async function removeApi(url,btn){
-    await fetch("/remove-api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})});
-    btn.parentElement.remove();
-  }
-
-  function graph(url){
-    window.open("/graph?url="+encodeURIComponent(url));
-  }
-
-  load();
-  setInterval(load,5000);
-  </script>
-  </body>
-  </html>
-  `);
+  res.send("API Monitoring System Running 🚀");
 });
 
-// ---------------- STATUS ----------------
-app.get("/status", async (req, res) => {
-  const urls = (await ApiList.find()).map(x => x.url);
+/* Get All Logs */
 
-  const data = await ApiLog.aggregate([
-    { $match: { url: { $in: urls } } },
-    { $sort: { time: -1 } },
-    {
-      $group: {
-        _id: "$url",
-        status: { $first: "$status" },
-        responseTime: { $first: "$responseTime" }
-      }
-    }
-  ]);
-
-  for (let d of data) {
-    d.uptime = await getUptime(d._id);
-  }
-
-  res.json(data);
-});
-
-// ---------------- ADD ----------------
-app.post("/add-api", async (req, res) => {
-  const { url } = req.body;
-  await ApiList.updateOne({ url }, { url }, { upsert: true });
-  res.json({ ok:true });
-});
-
-// ---------------- REMOVE ----------------
-app.post("/remove-api", async (req, res) => {
-  const { url } = req.body;
-  await ApiList.deleteOne({ url });
-  await ApiLog.deleteMany({ url });
-  res.json({ ok:true });
-});
-
-// ---------------- GRAPH ----------------
-app.get("/graph", async (req, res) => {
-  const { url } = req.query;
-
-  res.send(`
-  <html>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <body style="background:#0b1b34;color:white;text-align:center">
-  <h2>${url}</h2>
-  <canvas id="c"></canvas>
-
-  <script>
-  fetch("/logs?url=${url}")
-  .then(r=>r.json())
-  .then(d=>{
-    new Chart(document.getElementById("c"),{
-      type:"line",
-      data:{
-        labels:d.map(x=>new Date(x.time).toLocaleTimeString()),
-        datasets:[{
-          label:"Response",
-          data:d.map(x=>x.responseTime||null),
-          borderColor:"yellow"
-        }]
-      }
-    });
-  });
-  </script>
-  </body>
-  </html>
-  `);
-});
-
-// ---------------- LOGS ----------------
 app.get("/logs", async (req, res) => {
-  const logs = await ApiLog.find({ url: req.query.url })
-    .sort({ time: -1 })
-    .limit(20);
+  try {
+    const logs = await ApiLog.find().sort({ checkedAt: -1 });
 
-  res.json(logs.reverse());
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
 });
 
-// ---------------- START ----------------
+/* Add API */
+
+app.post("/add-api", (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({
+      error: "URL required",
+    });
+  }
+
+  monitoredApis.push(url);
+
+  res.json({
+    message: "API Added",
+    monitoredApis,
+  });
+});
+
+/* =========================
+   Start Server
+========================= */
+
 app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
+  console.log(`Server running on port ${PORT}`);
 });
