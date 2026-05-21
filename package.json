@@ -3,25 +3,24 @@
   "version": "1.0.0",
   "description": "API monitoring system with alerts",
   "main": "server.js",
-
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-
   "author": "Mahesh",
   "license": "ISC",
-
   "dependencies": {
     "axios": "^1.16.0",
     "chalk": "^4.1.2",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "mongoose": "^9.6.1",
+    "mongodb": "^6.8.0",
+    "mongoose": "^8.5.0",
+    "node-cron": "^4.2.1",
     "nodemailer": "^8.0.7",
     "socket.io": "^4.8.3"
   },
-
   "devDependencies": {
     "nodemon": "^3.0.0"
   }
