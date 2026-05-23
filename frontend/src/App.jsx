@@ -15,16 +15,33 @@ import {
 function App() {
   const [logs, setLogs] = useState([]);
   const [selectedApi, setSelectedApi] = useState(null);
+
   const [apiInput, setApiInput] = useState("");
+
+  // Default APIs
+  const defaultApis = [
+    {
+      apiName: "GitHub API",
+      url: "https://api.github.com",
+    },
+    {
+      apiName: "JSONPlaceholder",
+      url: "https://jsonplaceholder.typicode.com/posts",
+    },
+  ];
 
   useEffect(() => {
     fetchLogs();
+
+    // Load default APIs only once
+    loadDefaultApis();
 
     const interval = setInterval(() => {
       fetchLogs();
     }, 5000);
 
     return () => clearInterval(interval);
+
   }, []);
 
   const fetchLogs = async () => {
@@ -56,26 +73,71 @@ function App() {
     }
   };
 
+  const loadDefaultApis = async () => {
+
+    for (const api of defaultApis) {
+
+      const exists = logs.find(
+        (item) =>
+          item.apiName === api.apiName
+      );
+
+      if (exists) continue;
+
+      try {
+
+        const start = Date.now();
+
+        const response =
+          await axios.get(api.url);
+
+        const responseTime =
+          Date.now() - start;
+
+        const newLog = {
+          _id: Date.now() + Math.random(),
+          apiName: api.apiName,
+          statusCode: response.status,
+          responseTime,
+          checkedAt: new Date(),
+        };
+
+        setLogs((prev) => [
+          ...prev,
+          newLog,
+        ]);
+
+      } catch {
+        console.log("API failed");
+      }
+    }
+  };
+
   const addApi = async () => {
+
     if (!apiInput) return;
 
-    const alreadyExists = logs.find(
-      (item) =>
-        item.apiName.toLowerCase() ===
-        apiInput.toLowerCase()
-    );
+    const alreadyExists =
+      logs.find(
+        (item) =>
+          item.apiName.toLowerCase() ===
+          apiInput.toLowerCase()
+      );
 
     if (alreadyExists) {
-      alert("API already added");
+      alert("API already exists");
       return;
     }
 
     try {
+
       const start = Date.now();
 
-      const response = await axios.get(apiInput);
+      const response =
+        await axios.get(apiInput);
 
-      const responseTime = Date.now() - start;
+      const responseTime =
+        Date.now() - start;
 
       const newLog = {
         _id: Date.now(),
@@ -85,9 +147,12 @@ function App() {
         checkedAt: new Date(),
       };
 
-      setLogs((prev) => [newLog, ...prev]);
+      setLogs((prev) => [
+        newLog,
+        ...prev,
+      ]);
 
-    } catch (error) {
+    } catch {
 
       const failedLog = {
         _id: Date.now(),
@@ -97,122 +162,196 @@ function App() {
         checkedAt: new Date(),
       };
 
-      setLogs((prev) => [failedLog, ...prev]);
+      setLogs((prev) => [
+        failedLog,
+        ...prev,
+      ]);
     }
 
     setApiInput("");
   };
 
-  // Unique APIs only
-  const uniqueApis = [];
+  const uniqueApis=[];
 
-  const apiCards = logs.filter((log) => {
-    if (!uniqueApis.includes(log.apiName)) {
-      uniqueApis.push(log.apiName);
-      return true;
-    }
+  const apiCards =
+    logs.filter((log)=>{
 
-    return false;
-  });
+      if(
+        !uniqueApis.includes(
+          log.apiName
+        )
+      ){
+        uniqueApis.push(
+          log.apiName
+        );
 
-  // Selected graph data
-  const filteredLogs = selectedApi
-    ? logs.filter(
-        (log) => log.apiName === selectedApi
-      )
-    : [];
+        return true;
+      }
+
+      return false;
+    });
+
+  const filteredLogs =
+    selectedApi
+    ?
+    logs.filter(
+      (log)=>
+      log.apiName===
+      selectedApi
+    )
+    :
+    [];
 
   return (
-    <div className="container">
-      <h1>🚀 Professional API Monitor</h1>
 
-      <div className="top-bar">
-        <input
-          type="text"
-          placeholder="Enter API URL..."
-          value={apiInput}
-          onChange={(e) =>
-            setApiInput(e.target.value)
-          }
-          className="search-box"
-        />
+<div className="container">
 
-        <button
-          onClick={addApi}
-          className="add-btn"
-        >
-          Monitor API
-        </button>
-      </div>
+<h1>
+🚀 Professional API Monitor
+</h1>
 
-      <div className="grid">
-        {apiCards.map((log) => (
-          <div
-            key={log._id}
-            className={`card ${
-              log.statusCode === 200
-                ? "success"
-                : "failed"
-            }`}
-            onClick={() =>
-              setSelectedApi(log.apiName)
-            }
-          >
-            <h2>{log.apiName}</h2>
+<div className="top-bar">
 
-            <p>Status: {log.statusCode}</p>
+<input
+type="text"
+placeholder="Enter API URL..."
+value={apiInput}
+onChange={(e)=>
+setApiInput(
+e.target.value
+)}
+className="search-box"
+/>
 
-            <p>
-              Response Time:
-              {" "}
-              {log.responseTime} ms
-            </p>
+<button
+onClick={addApi}
+className="add-btn"
+>
+Monitor API
+</button>
 
-            <p>
-              {new Date(
-                log.checkedAt
-              ).toLocaleString()}
-            </p>
-          </div>
-        ))}
-      </div>
+</div>
 
-      {selectedApi && (
-        <div className="chart-container">
-          <h2>{selectedApi} Analytics</h2>
+<div className="grid">
 
-          <ResponsiveContainer
-            width="100%"
-            height={400}
-          >
-            <LineChart data={filteredLogs}>
-              <CartesianGrid strokeDasharray="3 3" />
+{apiCards.map((log)=>(
 
-              <XAxis
-                dataKey="checkedAt"
-                tickFormatter={(time) =>
-                  new Date(
-                    time
-                  ).toLocaleTimeString()
-                }
-              />
+<div
+key={log._id}
+className={`card ${
+log.statusCode===200
+?
+"success"
+:
+"failed"
+}`}
+onClick={()=>
+setSelectedApi(
+log.apiName
+)
+}
+>
 
-              <YAxis />
+<h2>
+{log.apiName}
+</h2>
 
-              <Tooltip />
+<p>
+Status:
+{" "}
+{log.statusCode}
+</p>
 
-              <Line
-                type="monotone"
-                dataKey="responseTime"
-                stroke="#00ff99"
-                strokeWidth={3}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-    </div>
-  );
+<p>
+Response:
+{" "}
+{log.responseTime}
+ms
+</p>
+
+<p>
+{
+new Date(
+log.checkedAt
+)
+.toLocaleString()
+}
+</p>
+
+</div>
+
+))}
+
+</div>
+
+{
+selectedApi && (
+
+<div
+className=
+"chart-container"
+>
+
+<h2>
+{selectedApi}
+Analytics
+</h2>
+
+<ResponsiveContainer
+width="100%"
+height={400}
+>
+
+<LineChart
+data=
+{filteredLogs}
+>
+
+<CartesianGrid
+strokeDasharray=
+"3 3"
+/>
+
+<XAxis
+dataKey=
+"checkedAt"
+tickFormatter=
+{(time)=>
+
+new Date(
+time
+)
+.toLocaleTimeString()
+}
+/>
+
+<YAxis/>
+
+<Tooltip/>
+
+<Line
+type=
+"monotone"
+dataKey=
+"responseTime"
+stroke=
+"#00ff99"
+strokeWidth=
+{3}
+/>
+
+</LineChart>
+
+</ResponsiveContainer>
+
+</div>
+
+)}
+
+</div>
+
+);
+
 }
 
 export default App;
